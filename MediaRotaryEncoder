@@ -1,0 +1,157 @@
+import board
+import time
+import usb_hid
+import rotaryio
+
+import adafruit_dotstar as dotstar
+
+from digitalio import DigitalInOut, Direction, Pull
+from adafruit_hid.consumer_control import ConsumerControl
+from adafruit_hid.consumer_control_code import ConsumerControlCode
+
+# Consumer control
+cc = ConsumerControl(usb_hid.devices)
+
+# Onboard red LED
+led = DigitalInOut(board.D13)
+led.direction = Direction.OUTPUT
+
+# Onboard DotStar LED
+dot = dotstar.DotStar(board.APA102_SCK, board.APA102_MOSI, 1, brightness=0.1)
+
+# Rotary encoder wheel
+encoder = rotaryio.IncrementalEncoder(board.D4, board.D3)
+
+# Rotary encoder button
+button = DigitalInOut(board.D2)
+button.direction = Direction.INPUT
+button.pull = Pull.UP
+
+# ----------------------
+# Constants
+
+red = (255, 0, 0)
+green = (0, 255, 0)
+blue = (0, 0, 255)
+
+threshold = 0.5
+
+# ----------------------
+# Global variables
+
+encoder_old_pos = 0
+button_press_time = 0
+button_old_value = button.value
+short_press = False
+long_press = False
+playing = False
+
+# ----------------------
+# Helpers
+
+def time_now():
+    return time.monotonic()
+
+def play():
+    global playing
+    print("PLAY")
+    cc.send(0xB0)
+    playing = True
+    dot[0] = green
+
+def pause():
+    global playing
+    print("PAUSE")
+    cc.send(0xB1)
+    playing = False
+    dot[0] = red
+
+def vol_up():
+    print("UP")
+    cc.send(ConsumerControlCode.VOLUME_INCREMENT)
+
+def vol_down():
+    print("DOWN")
+    cc.send(ConsumerControlCode.VOLUME_DECREMENT)
+
+def next():
+    global dot
+    global playing
+    print("NEXT")
+    cc.send(ConsumerControlCode.SCAN_NEXT_TRACK)
+    if not playing:
+        time.sleep(0.05)
+        cc.send(0xB1)
+
+
+def previous():
+    global dot
+    global playing
+    print("PREVIOUS")
+    cc.send(ConsumerControlCode.SCAN_PREVIOUS_TRACK)
+    if not playing:
+        time.sleep(0.05)
+        cc.send(0xB1)
+
+
+def check_button():
+    global dot
+    global button_old_value
+    global button_press_time
+    global short_press
+    global long_press
+
+    pressed = not button.value
+    now = time_now()
+
+    # Button was pressed
+    if not button_old_value and pressed:
+        button_old_value = True
+        button_press_time = now
+    # Button was released
+    if button_old_value and not pressed:
+        button_old_value = False
+        long_press = False
+        if now - button_press_time <= threshold:
+            short_press = True
+        elif playing:
+            dot[0] = green
+        else:
+            dot[0] = red
+    # Button was pressed for long enough
+    if button_old_value and pressed and now - button_press_time > threshold:
+        long_press = True
+        dot[0] = blue
+
+# ----------------------
+# Main loop
+
+pause()
+
+while True:
+    encoder_new_pos = encoder.position
+    check_button()
+
+    if short_press:
+        if playing:
+            pause()
+        else:
+            play()
+        short_press = False
+
+    if encoder_new_pos > encoder_old_pos:
+        if long_press:
+            vol_up()
+        else:
+            next()
+
+    if encoder_new_pos < encoder_old_pos:
+        if long_press:
+            vol_down()
+        else:
+            previous()
+
+
+    # Recompute new stuff
+    encoder_old_pos = encoder_new_pos
+    time.sleep(0.001)
